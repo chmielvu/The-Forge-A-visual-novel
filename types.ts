@@ -1,4 +1,5 @@
 
+
 import type { DirectorAI } from './services/directorService';
 import type { NetworkXGraphService } from './services/graphService';
 import type { VisualValidator } from './services/visualValidator';
@@ -62,6 +63,18 @@ export interface AudioState {
   narratorMood?: 'mocking' | 'seductive' | 'clinical' | 'sympathetic';
 }
 
+export type Choice = {
+  id: string;
+  text: string;
+  impactPrediction?: string;
+} | {
+  id: string;
+  type: 'input';
+  placeholder: string;
+  impactPrediction?: string;
+};
+
+
 export interface NarrativeState {
   sceneId?: string; // Unique ID to track if the scene is new or a continuation
   text: string;
@@ -73,11 +86,7 @@ export interface NarrativeState {
   characterSpritePrompt?: string;
   characterSpriteUrl?: string; // Generated or cached
   videoUrl?: string; // Veo generated video
-  choices: {
-    id: string;
-    text: string;
-    impactPrediction?: string; // "Deep Think" preview
-  }[];
+  choices: Choice[];
   ledgerUpdates?: Partial<YandereLedger>;
   graphUpdates?: {
     nodes: GraphNode[];

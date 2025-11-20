@@ -188,15 +188,17 @@ ${agentSummary}
 CURRENT STATE:
 Ledger: ${JSON.stringify(state.ledger)}
 
-USER ACTION: "${userAction}"
+USER ACTION: "${userAction}" // This could be a choice text or a private confession from the subject.
 
 YOUR TASK:
 Weave the agent thoughts into a cohesive narrative beat.
-- Choose which character speaks/acts
-- Determine if their public action matches their private goal (or if they're hiding something)
-- Generate the visualPromptJSON that captures the EXACT scene described
-- Update ledger based on narrative impact
-- Add graph edges for new relationships/tensions
+- The dialogue MUST contain subtext. What is said should be a mask for what is truly meant, as revealed in the private agent thoughts. Weaponize the subject's fears, especially if they've just confessed something. Use insinuation, veiled threats, and loaded questions.
+- Choose which character speaks/acts.
+- Determine if their public action matches their private goal (or if they're hiding something).
+- Generate the visualPromptJSON that captures the EXACT scene described.
+- Update ledger based on narrative impact.
+- Add graph edges for new relationships/tensions.
+- **Occasionally, instead of two choices, offer a single 'input' choice to force a confession. For example: { "id": "confess_fear", "type": "input", "placeholder": "Confess your deepest fear..." }**
 
 CRITICAL: The visual prompt MUST be a cinematic snapshot of THIS EXACT MOMENT.
 If Selene leans over the desk, the image shows Selene leaning over the desk.
@@ -249,12 +251,20 @@ Synchronize text and image perfectly.
             choices: {
               type: Type.ARRAY,
               items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  text: { type: Type.STRING },
-                  impactPrediction: { type: Type.STRING }
-                }
+                oneOf: [
+                  {
+                    type: Type.OBJECT, properties: {
+                      id: { type: Type.STRING }, text: { type: Type.STRING }, impactPrediction: { type: Type.STRING }
+                    },
+                    required: ["id", "text"]
+                  },
+                  {
+                    type: Type.OBJECT, properties: {
+                      id: { type: Type.STRING }, type: { type: Type.STRING, enum: ['input'] }, placeholder: { type: Type.STRING }, impactPrediction: { type: Type.STRING }
+                    },
+                     required: ["id", "type", "placeholder"]
+                  }
+                ]
               }
             },
             ledgerUpdates: {

@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { INITIAL_CHARACTERS } from './lore';
-import { AppState, CurriculumPhase, NarrativeState } from './types';
+import { AppState, CurriculumPhase, NarrativeState, Choice } from './types';
 import { createDirectorAI, createGraphService, createVisualValidator, createTTSService } from './services';
-import { urlToBase64, editVisual } from './services/geminiService'; // Keep some helpers
+import { urlToBase64, editVisual } from './services/geminiService';
 import { YandereLedgerUI } from './components/YandereLedger';
 import { NetworkGraph } from './components/NetworkGraph';
 import { AudioManager } from './components/AudioManager';
@@ -57,6 +56,33 @@ const INITIAL_STATE: AppState = {
   sceneBaseImage: undefined,
 };
 
+const useTypewriter = (text: string, speed = 30) => {
+  const [displayText, setDisplayText] = useState('');
+  const isDone = useRef(false);
+
+  useEffect(() => {
+    isDone.current = false;
+    setDisplayText('');
+    if (!text) return;
+    
+    let i = 0;
+    const typingInterval = setInterval(() => {
+      if (i < text.length) {
+        setDisplayText(prev => prev + text.charAt(i));
+        i++;
+      } else {
+        clearInterval(typingInterval);
+        isDone.current = true;
+      }
+    }, speed);
+
+    return () => clearInterval(typingInterval);
+  }, [text, speed]);
+
+  return {displayText, isDone: isDone.current};
+};
+
+
 function App() {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const [bgImage, setBgImage] = useState<string>("/placeholder.webp");
@@ -65,6 +91,9 @@ function App() {
   const [audioActive, setAudioActive] = useState(false); 
   const [showUnlockOverlay, setShowUnlockOverlay] = useState(false);
   const [thinkingStage, setThinkingStage] = useState<string>("");
+  const [confessionInput, setConfessionInput] = useState("");
+  const { displayText, isDone } = useTypewriter(state.currentScene.text);
+
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Initialize Services
@@ -80,7 +109,6 @@ function App() {
       const savedGraph = localStorage.getItem('forge_graph');
       graphService.initializeGraph(state).then(() => {
           if(savedGraph && graphService) {
-              // Re-initialize graph with saved data - simplistic for now
               console.log("Graph state loaded from previous session.");
           }
       });
@@ -97,7 +125,6 @@ function App() {
   // Cache graph state
   useEffect(() => {
     if (state.graphService) {
-        // Debounced save
         const timer = setTimeout(() => {
             const graphData = state.graphService.getGraphStateForUI();
             if(graphData.nodes.length > INITIAL_STATE.graph.nodes.length) {
@@ -110,11 +137,11 @@ function App() {
 
   // TTS hook
   useEffect(() => {
-    if (audioActive && state.currentScene.text && state.apiKey) {
-        const timer = setTimeout(() => playTTS(), 500);
+    if (audioActive && isDone && state.currentScene.text && state.apiKey) {
+        const timer = setTimeout(() => playTTS(), 250);
         return () => clearTimeout(timer);
     }
-  }, [state.currentScene.text, audioActive, state.apiKey]);
+  }, [isDone, state.currentScene.text, audioActive, state.apiKey]);
 
 
   const handleUnlockAudio = () => {
@@ -135,18 +162,55 @@ function App() {
     setState(prev => ({ ...prev, isGeneratingVisuals: true }));
     try {
       const isSameScene = scene.sceneId && previousState?.currentScene?.sceneId && scene.sceneId === previousState.currentScene.sceneId;
+      
+      const mood = scene.audio?.narratorMood;
+      let moodAnimationPrompt = '';
+
+      switch (mood) {
+        case 'sympathetic':
+          moodAnimationPrompt = ', with a subtle motion blur suggesting a shiver or tremble.';
+          break;
+        case 'mocking':
+          moodAnimationPrompt = ', with a sharper, more defined posture and a cruel micro-expression shift.';
+          break;
+        case 'seductive':
+          moodAnimationPrompt = ', leaning forward almost imperceptibly, lips slightly parted.';
+          break;
+        case 'clinical':
+          moodAnimationPrompt = ', perfectly still, unnervingly static and observant.';
+          break;
+        default:
+          moodAnimationPrompt = '';
+      }
+
       let finalImage = "";
       if (isSameScene && previousState?.sceneBaseImage) {
-        console.log("🎨 Editing existing scene:", scene.sceneId);
-        const editPrompt = `Update: ${scene.visualPromptJSON.characters.map((c: any) => `${c.id} now ${c.expression}, ${c.pose}`).join(', ')}`;
+        console.log(`🎨 Editing existing scene with mood '${mood}':`, scene.sceneId);
+        const editPrompt = `Update: ${scene.visualPromptJSON.characters.map((c: any) => `${c.id} now ${c.expression}, ${c.pose}`).join(', ')}${moodAnimationPrompt}`;
         const { base64, mimeType } = await urlToBase64(previousState.sceneBaseImage);
         if (base64) {
           finalImage = await editVisual(state.apiKey!, base64, mimeType, editPrompt);
         }
       } else {
-        console.log("🎨 Generating new validated scene:", scene.sceneId);
-        finalImage = await state.visualValidator.generateValidatedImage(scene.visualPromptJSON, 2);
+        console.log(`🎨 Generating new validated scene with mood '${mood}':`, scene.sceneId);
+        
+        // Create a deep copy to avoid mutating state
+        const modifiedVisualPromptJSON = JSON.parse(JSON.stringify(scene.visualPromptJSON));
+        
+        if (moodAnimationPrompt && modifiedVisualPromptJSON.characters?.length > 0) {
+            const speakerId = scene.speakerId;
+            // Find the speaking character to apply the animation, or default to the first.
+            const characterToAnimate = modifiedVisualPromptJSON.characters.find((c: any) => c.id === speakerId) || modifiedVisualPromptJSON.characters[0];
+            
+            if (characterToAnimate) {
+                // We add the animation detail to the pose description.
+                characterToAnimate.pose += moodAnimationPrompt;
+            }
+        }
+        
+        finalImage = await state.visualValidator.generateValidatedImage(modifiedVisualPromptJSON, 2);
       }
+
       if (finalImage) {
         setBgImage(finalImage);
         setState(prev => ({ ...prev, sceneBaseImage: finalImage }));
@@ -182,12 +246,26 @@ function App() {
     }
   };
   
-  const handleChoice = async (choiceText: string) => {
+  const handleChoice = async (choice: Choice) => {
     if (!state.apiKey || state.isThinking || !state.directorAI) return;
+    
+    let userAction: string;
+    // Fix for line 224: Use 'text' in choice as a type guard to correctly narrow the union type.
+    if ('text' in choice) {
+      userAction = choice.text;
+    } else {
+      if (!confessionInput.trim()) {
+          console.warn("Confession input is empty.");
+          return;
+      }
+      userAction = `(Player Confession: ${confessionInput.trim()})`;
+      setConfessionInput("");
+    }
+
     setState(prev => ({ ...prev, isThinking: true }));
     const previousState = { ...state };
     try {
-      const nextScene = await state.directorAI.orchestrate(state, choiceText, setThinkingStage);
+      const nextScene = await state.directorAI.orchestrate(state, userAction, setThinkingStage);
       if (nextScene.graphUpdates && state.graphService) {
         for (const link of nextScene.graphUpdates.links) {
           await state.graphService.addEdge(link.source, link.target, link.label, link.strength);
@@ -223,6 +301,7 @@ function App() {
   })[state.currentScene.audio?.narratorMood || ''] || '';
   
   const getTensionClass = () => (state.currentScene.audio?.bgm === 'tension' || state.currentScene.audio?.bgm === 'heartbeat') ? 'animate-pulse-slow bg-red-900/10' : '';
+  const traumaGlitch = state.ledger.traumaLevel > 75;
 
   return (
     <div className="relative w-screen h-screen overflow-hidden flex bg-black">
@@ -249,7 +328,11 @@ function App() {
       )}
 
       <div className="flex-1 relative">
-        <div className="absolute inset-0 bg-cover bg-center transition-opacity duration-1000" style={{ backgroundImage: `url(${bgImage})` }}>
+        <div 
+           className={`absolute inset-0 bg-cover bg-center transition-opacity duration-1000 ${traumaGlitch ? 'glitch' : ''}`}
+           style={{ backgroundImage: `url(${bgImage})` }}
+           data-text={traumaGlitch ? " REALITY_FRACTURE " : ""}
+        >
            <div className="absolute inset-0 bg-black/20 weeping-wall mix-blend-overlay" />
         </div>
         <div className={`absolute inset-0 pointer-events-none transition-all duration-1000 ${getAtmosphereClass()}`} />
@@ -260,13 +343,36 @@ function App() {
                   <span className="text-[#d4af37] text-2xl font-header font-bold tracking-widest">{state.currentScene.speaker || "???"}</span>
                   <button onClick={playTTS} className="text-gray-500 hover:text-[#d4af37] flex items-center gap-2 font-mono-code text-[10px] uppercase border border-gray-800 hover:border-[#d4af37] px-3 py-1 bg-black/50"><Volume2 size={12}/> REPLAY</button>
               </div>
-              <div className="bg-black/70 border-l-2 border-[#d4af37] p-6 backdrop-blur-md mb-8 relative"><p className="text-xl leading-relaxed">{state.currentScene.text}</p></div>
+              <div className="bg-black/70 border-l-2 border-[#d4af37] p-6 backdrop-blur-md mb-8 relative">
+                <p className={`text-xl leading-relaxed ${!isDone ? 'caret-blink' : ''}`}>{displayText}</p>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {state.currentScene.choices.map(choice => (
-                      <button key={choice.id} onClick={() => handleChoice(choice.text)} disabled={state.isThinking} className="bg-[#0f0f0f] border border-gray-800 p-5 text-left hover:bg-[#1a1a1a] hover:border-[#d4af37] transition-all group disabled:opacity-50">
-                          <span className="block text-gray-300 group-hover:text-[#d4af37]">{choice.text}</span>
-                          {choice.impactPrediction && (<span className="block text-xs text-red-900/70 font-mono-code mt-2 group-hover:text-red-500">&gt; {choice.impactPrediction}</span>)}
-                      </button>
+                      // Fix for line 333: Swapped ternary branches and used 'text' in choice as the type guard.
+                      'text' in choice ? (
+                          <button key={choice.id} onClick={() => handleChoice(choice)} disabled={state.isThinking} className="bg-[#0f0f0f] border border-gray-800 p-5 text-left hover:bg-[#1a1a1a] hover:border-[#d4af37] transition-all group disabled:opacity-50">
+                              <span className="block text-gray-300 group-hover:text-[#d4af37]">{choice.text}</span>
+                              {choice.impactPrediction && (<span className="block text-xs text-red-900/70 font-mono-code mt-2 group-hover:text-red-500">&gt; {choice.impactPrediction}</span>)}
+                          </button>
+                      ) : (
+                          <div key={choice.id} className="bg-[#0f0f0f] border border-gray-800 p-5 text-left transition-all group disabled:opacity-50 flex flex-col md:col-span-2">
+                              <input
+                                  type="text"
+                                  placeholder={choice.placeholder}
+                                  value={confessionInput}
+                                  onChange={(e) => setConfessionInput(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') handleChoice(choice); }}
+                                  className="w-full bg-transparent border-b border-gray-700 p-2 text-white focus:border-[#d4af37] outline-none font-mono-code text-lg"
+                                  disabled={state.isThinking}
+                              />
+                              <div className="flex justify-between items-end mt-4">
+                                  {choice.impactPrediction && (<span className="block text-xs text-red-900/70 font-mono-code group-hover:text-red-500">&gt; {choice.impactPrediction}</span>)}
+                                  <button onClick={() => handleChoice(choice)} disabled={state.isThinking || !confessionInput.trim()} className="bg-[#4a0404] hover:bg-[#600505] text-white p-2 transition-all font-header border border-[#d4af37]/20 tracking-widest text-sm self-end px-6 disabled:opacity-50">
+                                      CONFESS
+                                  </button>
+                              </div>
+                          </div>
+                      )
                   ))}
               </div>
            </div>
