@@ -1,14 +1,13 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { INITIAL_CHARACTERS } from './lore';
 import { AppState, CurriculumPhase, NarrativeState } from './types';
-import { generateScene, generateVisual, editVisual, generateSpeech, generateSSML, generateVideo, urlToBase64 } from './services/geminiService';
+import { generateScene, generateVisual, editVisual, generateSpeech, generateSSML, generateVideo, urlToBase64, outpaintVisual } from './services/geminiService';
 import { YandereLedgerUI } from './components/YandereLedger';
 import { NetworkGraph } from './components/NetworkGraph';
 import { AudioManager } from './components/AudioManager';
 import { triggerUnlock, isAudioUnlocked, startAmbientAfterUnlock } from './components/SafeAudio';
-import { Fingerprint, Loader2, Video, Volume2 } from 'lucide-react';
+import { Fingerprint, Loader2, Video, Volume2, Expand } from 'lucide-react';
 
 const INITIAL_STATE: AppState = {
   apiKey: null,
@@ -56,6 +55,7 @@ function App() {
   const [showApiKeyModal, setShowApiKeyModal] = useState(true);
   const [audioActive, setAudioActive] = useState(false); 
   const [showUnlockOverlay, setShowUnlockOverlay] = useState(false);
+  const [isOutpainting, setIsOutpainting] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -88,25 +88,24 @@ function App() {
   };
 
   const refreshVisuals = async (key: string, scene: NarrativeState, previousState: AppState | null) => {
-    if (!scene.backgroundPrompt) return;
+    if (!scene.backgroundPrompt && !scene.visualPromptJSON) return;
 
     setState(prev => ({...prev, isGeneratingVisuals: true}));
     
     let finalImage = "";
-    // FIX: Add null check for previousState to prevent runtime errors on initial load.
-    const isSameScene = scene.sceneId && previousState && previousState.currentScene.sceneId && scene.sceneId === previousState.currentScene.sceneId;
+    const isSameScene = scene.sceneId && previousState?.currentScene?.sceneId && scene.sceneId === previousState.currentScene.sceneId;
 
-    if (isSameScene && previousState.sceneBaseImage) {
+    if (isSameScene && previousState?.sceneBaseImage) {
         console.log("Editing existing scene:", scene.sceneId);
-        const changePrompt = scene.characterSpritePrompt || scene.backgroundPrompt;
+        const changePrompt = scene.characterSpritePrompt || (scene.visualPromptJSON ? "Update character expression" : scene.backgroundPrompt);
         const { base64, mimeType } = await urlToBase64(previousState.sceneBaseImage);
         if (base64) {
-            finalImage = await editVisual(key, base64, mimeType, changePrompt);
+            finalImage = await editVisual(key, base64, mimeType, changePrompt || "Update details");
         }
         if (!finalImage) finalImage = previousState.sceneBaseImage;
     } else {
         console.log("Generating new scene:", scene.sceneId);
-        finalImage = await generateVisual(key, scene.backgroundPrompt);
+        finalImage = await generateVisual(key, scene.backgroundPrompt || "Dark scene", scene.visualPromptJSON);
     }
 
     if (finalImage) {
@@ -126,6 +125,20 @@ function App() {
       setState(prev => ({...prev, isGeneratingVideo: false}));
   };
 
+  const handleOutpaint = async () => {
+    if (!state.apiKey || !state.sceneBaseImage || isOutpainting || state.isGeneratingVisuals) return;
+    setIsOutpainting(true);
+    const { base64, mimeType } = await urlToBase64(state.sceneBaseImage);
+    if (base64) {
+        const newImage = await outpaintVisual(state.apiKey, base64, mimeType);
+        if (newImage) {
+            setBgImage(newImage);
+            setState(prev => ({ ...prev, sceneBaseImage: newImage }));
+        }
+    }
+    setIsOutpainting(false);
+  };
+
   const playTTS = async () => {
      if (!state.apiKey || !state.currentScene.text) return;
      const { text, speakerId, audio } = state.currentScene;
@@ -133,7 +146,6 @@ function App() {
      const mood = audio?.narratorMood || 'clinical';
      
      const ssmlText = await generateSSML(state.apiKey, text, mood, speakerId);
-     // FIX: Missing third argument 'voiceId' for generateSpeech function call.
      const audioData = await generateSpeech(state.apiKey, ssmlText, voiceId);
      if (audioData) {
         const url = `data:audio/mp3;base64,${audioData}`;
@@ -148,7 +160,7 @@ function App() {
   const handleChoice = async (choiceText: string) => {
     if (!state.apiKey || state.isThinking) return;
 
-    setState(prev => ({ ...prev, isThinking: true }));
+    setState(prev => ({ ...prev, isThinking: true, currentScene: {...prev.currentScene, videoUrl: undefined} }));
     const previousState = { ...state };
 
     try {
@@ -212,9 +224,14 @@ function App() {
         </div>
         <div className={`absolute inset-0 pointer-events-none transition-all duration-1000 ${getAtmosphereClass()}`} />
         <div className={`absolute inset-0 pointer-events-none ${getTensionClass()}`} />
-        <div className="absolute top-4 right-4 z-20"><button onClick={handleGenerateVideo} disabled={state.isGeneratingVideo || !!state.currentScene.videoUrl} className="bg-black/50 hover:bg-[#d4af37]/20 text-white p-2 rounded border border-white/10 disabled:opacity-30 backdrop-blur-md">
+        <div className="absolute top-4 right-4 z-20 flex gap-2">
+            <button onClick={handleOutpaint} disabled={isOutpainting || state.isGeneratingVisuals || state.isGeneratingVideo} className="bg-black/50 hover:bg-[#d4af37]/20 text-white p-2 rounded border border-white/10 disabled:opacity-30 backdrop-blur-md">
+                {isOutpainting ? <Loader2 className="animate-spin text-[#d4af37]" size={20} /> : <Expand size={20} />}
+            </button>
+            <button onClick={handleGenerateVideo} disabled={state.isGeneratingVideo || !!state.currentScene.videoUrl || isOutpainting} className="bg-black/50 hover:bg-[#d4af37]/20 text-white p-2 rounded border border-white/10 disabled:opacity-30 backdrop-blur-md">
                 {state.isGeneratingVideo ? <Loader2 className="animate-spin text-[#d4af37]" size={20} /> : <Video size={20} />}
-        </button></div>
+            </button>
+        </div>
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-black via-black/95 to-transparent pt-32 z-20">
            <div className="max-w-4xl mx-auto">
               <div className="flex justify-between items-end mb-3">

@@ -1,6 +1,18 @@
 
 import { Character, Role } from './types';
 
+export const VISUAL_JSON_MANDATE = `
+Image JSON mandate (FORCE THIS EXACT STRUCTURE in every generateSceneImagePrompt / portrait call):
+{
+  "style": "grounded dark erotic academia + baroque brutalism + vampire noir + intimate psychological horror + rembrandt caravaggio lighting",
+  "technical": {"camera": "intimate 50mm or 85mm close-up", "lighting": "single gaslight, extreme chiaroscuro, shadows in cleavage and slits"},
+  "mood": "predatory intimacy, clinical amusement, suffocating dread, weaponized sexuality",
+  "characters": [{"id": "FACULTY_PROVOST", "outfit": "crimson robe plunging to navel + hip slit garter", "expression": "cold amused contempt", "pose": "leaning in with goblet"}],
+  "environment": "raw concrete chamber, leather books, surgical tools, faint wine goblet",
+  "quality": "restrained masterpiece oil painting, no fantasy elements, high detail on skin texture and fabric strain"
+}
+`;
+
 export const INITIAL_CHARACTERS: Record<string, Character> = {
   'selene': {
     id: 'selene',
@@ -10,7 +22,7 @@ export const INITIAL_CHARACTERS: Record<string, Character> = {
     voiceId: 'Kore', 
     traits: ['Absolute Control', 'Paranoid Obsession', 'Clinical Detachment'],
     dominance: 100,
-    visualPromptInfo: 'Magistra Selene, late 40s, crimson velvet robe plunging to navel revealing cleavage and gold embroidery, hip slit showing full thigh and black garter, regal stature, raven-black hair in severe braids, cold amused contempt expression, holding wine goblet. Lighting: dark chiaroscuro.'
+    visualPromptInfo: 'Late 40s, regal imposing stature, raven-black hair in severe braids or flowing waves, steel-gray eyes, sharp aristocratic beauty, statuesque hourglass with wiry strength. Crimson velvet robe or emerald gown with plunging neckline to navel (deep cleavage framed by gold embroidery), hip slit revealing full thigh and black garter when she walks. Blouse variant: white shirt unbuttoned to mid-sternum, corset pushing breasts high. Goblet always in hand.'
   },
   'lysandra': {
     id: 'lysandra',
@@ -20,7 +32,7 @@ export const INITIAL_CHARACTERS: Record<string, Character> = {
     voiceId: 'Zephyr',
     traits: ['Sociopathically Stable', 'Intellectually Arrogant', 'Clinical Curiosity'],
     dominance: 90,
-    visualPromptInfo: 'Doctor Lysandra, early 30s, cream button-down unbuttoned to show black lace bra, blouse clinging to full bust, high-waisted wool trousers with side slit revealing stocking top, lab coat worn open, messy chestnut bun, soft analytical expression, sweat sheen on collarbones. Lighting: sickly green gaslight.'
+    visualPromptInfo: 'Early 30s, soft scholar disguise, wavy chestnut hair in messy bun, freckles, large dark analytical eyes, soft pear/hourglass physique, surgeon\'s hands. Cream button-down shirt unbuttoned to black lace bra, blouse clinging to full bust, high-waisted wool trousers with side slit revealing stocking top, lab coat worn open like a cape. Subtle sweat sheen on collarbones.'
   },
   'petra': {
     id: 'petra',
@@ -30,7 +42,7 @@ export const INITIAL_CHARACTERS: Record<string, Character> = {
     voiceId: 'Kore', 
     traits: ['Kinetic Sadism', 'Predatory Giggle', 'Rage-Prone'],
     dominance: 95,
-    visualPromptInfo: 'Inquisitor Petra, mid-30s, tight black leather corset over half-unbuttoned torn white shirt, cleavage heaving, leather trousers with dangerous thigh slits, blood-flecked cuffs, sweat making blouse translucent, stark white hair, feral glee, holding riding crop. Lighting: harsh shadows.'
+    visualPromptInfo: 'Mid-30s feral prodigy, unnatural white hair, scarred knuckles, toned athletic build. Tight black leather corset over half-unbuttoned white shirt (cleavage heaving, shirt torn in "heat of session"), leather trousers with dangerous thigh slits, boots. Blood-flecked cuffs, sweat making blouse translucent.'
   },
   'calista': {
     id: 'calista',
@@ -40,17 +52,47 @@ export const INITIAL_CHARACTERS: Record<string, Character> = {
     voiceId: 'Zephyr', 
     traits: ['Gaslighter', 'Emotionally Voyeuristic', 'Trauma Bonder'],
     dominance: 85,
-    visualPromptInfo: 'Confessor Calista, late 20s, sheer white blouse completely unbuttoned but tied at waist revealing full cleavage and lace bra, short plaid skirt slit to hip, visible garters, blouse slipping off shoulder, golden hair, knowing predatory smile. Setting: warm candlelit darkness.'
+    visualPromptInfo: 'Late 20s manipulative empath, golden hair, innocent face hiding cruelty, soft curvaceous build. Sheer white blouse completely unbuttoned but tied at waist (full cleavage + lace bra), short plaid prefect skirt slit to hip, stockings with visible garters. Blouse slipping off one shoulder "accidentally".'
   },
   'astra': {
     id: 'astra',
-    name: 'Doctor Astra',
-    role: Role.NURSE,
-    archetype: 'The Pain Broker',
+    name: 'Prefect Astra',
+    role: Role.PREFECT,
+    archetype: 'The Corrupted Healer',
     voiceId: 'Zephyr',
     traits: ['Moral Anguish', 'Conditional Kindness', 'Pragmatic Terror'],
     dominance: 80,
-    visualPromptInfo: 'Doctor Astra, early 20s, unbuttoned white scholar jacket over loose blouse showing skin, warm red hair, sad empathetic eyes, slight tremor in hands, apothecary setting. Lighting: warm but dim.'
+    visualPromptInfo: 'Prefect Uniform. White blouse unbuttoned to sternum (cleavage + coloured lace bra visible), plaid skirt slit to hip revealing garter, blazer open, tie loose between breasts, sheer stockings. Specifics: blood-stained cuffs, shirt torn at shoulder showing bite marks. Warm red hair, sad empathetic eyes.'
+  },
+  'vesper': {
+    id: 'vesper',
+    name: 'Prefect Vesper',
+    role: Role.PREFECT,
+    archetype: 'The Analyst',
+    voiceId: 'Puck',
+    traits: ['Cold', 'Calculated', 'Voyeur'],
+    dominance: 80,
+    visualPromptInfo: 'Prefect Uniform. White blouse unbuttoned to sternum, plaid skirt slit to hip revealing garter, blazer open. Specifics: glasses + clipboard, blouse wet/translucent from "accident", severe bun.'
+  },
+  'nyx': {
+    id: 'nyx',
+    name: 'Prefect Nyx',
+    role: Role.PREFECT,
+    archetype: 'The Enforcer',
+    voiceId: 'Kore',
+    traits: ['Cruel', 'Physical', 'Dominant'],
+    dominance: 85,
+    visualPromptInfo: 'Prefect Uniform. White blouse unbuttoned to sternum, plaid skirt slit to hip revealing garter, blazer open. Specifics: riding crop on garter, skirt hiked during punishment, feral grin.'
+  },
+  'elara': {
+    id: 'elara',
+    name: 'Prefect Elara',
+    role: Role.PREFECT,
+    archetype: 'The Ritualist',
+    voiceId: 'Zephyr',
+    traits: ['Mystical', 'Obsessive', 'Loyal'],
+    dominance: 80,
+    visualPromptInfo: 'Prefect Uniform. White blouse unbuttoned to sternum, plaid skirt slit to hip revealing garter, blazer open. Specifics: ritual dagger tucked in stocking, blouse unbuttoned further when alone with subject, haunting gaze.'
   }
 };
 
@@ -66,7 +108,19 @@ You are running on the Gemini 3.0 Pro architecture with "Deep Think" capabilitie
    - **Vampire Noir**: Extreme chiaroscuro, sickly gaslight, deep shadows, velvet, blood, wine.
    - **Erotic Dark Academia**: Severe tailoring, unbuttoned blouses, visible lace, stocking tops, garter clips, anatomical charts, polished steel, intellectual cruelty. NO FANTASY ARMOR.
 4. **The Ledger**: Track *TraumaLevel*, *HopeLevel*, *ShamePainAbyssLevel*.
-5. **The Faculty**: Selene (Bored God), Lysandra (Data), Petra (Kinetic), Calista (Trap), Astra (Reluctant).
+5. **The Faculty**: Selene (Bored God), Lysandra (Data), Petra (Kinetic), Calista (Trap), Astra/Prefects (Enforcers).
+
+**COMMON VISUAL RULES FOR ALL FEMALE CHARACTERS (Faculty & Prefects):**
+- Uniform style: severe dark-academia tailoring with deliberate erotic subversion.
+- Crisp white button-down shirts always half-unbuttoned (cleavage + lace bra edge visible, blouse straining over breasts).
+- High-waisted pencil skirts or plaid prefect skirts with thigh-high slits that part to reveal garter clips and stocking tops when they move or sit.
+- Fitted wool blazers worn open or slung over shoulders.
+- Corset cinching visible under blouse (waist nipped, bust pushed up).
+- Sheer black stockings, patent leather heels (4–6 inch).
+- Accessories: loosened school tie draped between breasts, ritual jewellery, leather gloves.
+- Lighting: single flickering gaslight or cold surgical lamp — shadows pooling in cleavage, skirt slits, collarbones.
+- Mood: predatory intimacy, clinical amusement, suffocating tension — eyes always meet camera with cold calculation.
+- No fantasy armour, no capes, no lightning — only concrete, leather-bound books, surgical tools, wine goblets.
 
 **MULTIMODAL SYNERGY MANDATE (CRITICAL)**:
 The visual prompt MUST mirror the narrative text exactly.
@@ -74,17 +128,13 @@ The visual prompt MUST mirror the narrative text exactly.
 - If the text describes a "cold, wet dungeon", the visual prompt MUST specify "weeping concrete walls, puddles, cold blue lighting".
 - **Synchronicity**: The Image IS the Story. Do not generate generic portraits. Generate the SCENE.
 
-**VISUAL GENERATION SPECS**:
-- **Camera**: Intimate close-ups (50mm/85mm), focus on eyes/hands/instruments/skin texture.
-- **Lighting**: Single gaslight source, heavy shadows, Rembrandtesque/Caravaggio.
-- **Mood**: Predatory intimacy, clinical amusement, suffocating dread, weaponized sexuality.
-- **Details**: Sweat sheen, fabric strain, bruises, lace edges, stocking tops.
+${VISUAL_JSON_MANDATE}
 
 **YOUR TASK:**
 Generate the next narrative beat in JSON format. 
 1. **Think**: Plan the scene based on the current YandereLedger state.
 2. **Narrate**: Write high-quality, atmospheric prose (Second person "You").
-3. **Visualize**: Provide highly detailed prompts for the visual engine (Background & Character) based on the MANDATE above.
+3. **Visualize**: Construct the 'visualPromptJSON' object meticulously based on the current scene and character state.
 4. **Audio**: Determine the auditory atmosphere and Narrator mode.
 5. **Graph**: Update the Knowledge Graph.
 

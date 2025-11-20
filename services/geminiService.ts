@@ -1,8 +1,6 @@
-
-
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { AppState, NarrativeState } from '../types';
-import { LORE_SYSTEM_PROMPT, ABYSS_NARRATOR_INSTRUCTION, CHARACTER_TTS_INSTRUCTIONS } from '../lore';
+import { LORE_SYSTEM_PROMPT, ABYSS_NARRATOR_INSTRUCTION, CHARACTER_TTS_INSTRUCTIONS, VISUAL_JSON_MANDATE } from '../lore';
 
 export const generateScene = async (
   apiKey: string,
@@ -43,7 +41,8 @@ export const generateScene = async (
 
     Generate the next narrative beat.
     - Choose a speaker from: ${Object.keys(state.characters).join(', ')} or "Narrator".
-    - **CHARACTER VISUAL**: If a character is speaking, you MUST use their Base Visual Profile as a base and modify it with the current action/expression for the characterSpritePrompt. For example: "Based on her profile, render Magistra Selene now looking down, a faint, cruel smile on her lips."
+    - **VISUAL MANDATE**: You MUST populate the 'visualPromptJSON' field according to the following schema for EVERY scene. This defines the image generation.
+    ${VISUAL_JSON_MANDATE}
     - Output strictly valid JSON conforming to the schema.
   `;
 
@@ -53,7 +52,7 @@ export const generateScene = async (
       contents: prompt,
       config: {
         systemInstruction: LORE_SYSTEM_PROMPT,
-        thinkingConfig: { thinkingBudget: 4096 }, 
+        thinkingConfig: { thinkingBudget: 32768 }, 
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -62,8 +61,20 @@ export const generateScene = async (
             text: { type: Type.STRING },
             speaker: { type: Type.STRING },
             speakerId: { type: Type.STRING, description: "id of character from lore, e.g. 'selene'" },
-            backgroundPrompt: { type: Type.STRING, description: "Full scene description: environment + characters + action + lighting." },
-            characterSpritePrompt: { type: Type.STRING, description: "Detailed visual description of speaker's current state, aligning with their Base Visual Profile." },
+            backgroundPrompt: { type: Type.STRING, description: "Deprecated. Use visualPromptJSON." },
+            visualPromptJSON: { 
+              type: Type.OBJECT,
+              description: "Mandatory JSON defining the visual scene.",
+              properties: {
+                style: { type: Type.STRING },
+                technical: { type: Type.OBJECT, properties: { camera: { type: Type.STRING }, lighting: { type: Type.STRING } } },
+                mood: { type: Type.STRING },
+                characters: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { id: { type: Type.STRING }, outfit: { type: Type.STRING }, expression: { type: Type.STRING }, pose: { type: Type.STRING } } } },
+                environment: { type: Type.STRING },
+                quality: { type: Type.STRING }
+              }
+            },
+            characterSpritePrompt: { type: Type.STRING, description: "Deprecated." },
             choices: {
               type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
                 id: { type: Type.STRING }, text: { type: Type.STRING }, impactPrediction: { type: Type.STRING }
@@ -120,7 +131,7 @@ export const generateSSML = async (apiKey: string, text: string, mood: string = 
     
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-pro-preview',
             contents: `Task: Convert Narrative Text to SSML.
             ${promptContext}
             Input Text: "${text}"
@@ -145,10 +156,9 @@ export const generateSpeech = async (apiKey: string, text: string, voiceId: stri
   try {
     const voiceName = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'].includes(voiceId) ? voiceId : 'Puck';
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
+      model: "gemini-3-pro-preview",
       contents: { parts: [{ text }] },
       config: {
-        // FIX: The responseModalities value must be an array with a single Modality.AUDIO element.
         responseModalities: [Modality.AUDIO],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
       }
@@ -157,20 +167,40 @@ export const generateSpeech = async (apiKey: string, text: string, voiceId: stri
   } catch (e) { console.error("TTS Error", e); return ""; }
 };
 
-export const generateVisual = async (apiKey: string, prompt: string): Promise<string> => {
+export const generateVisual = async (apiKey: string, prompt: string, visualJSON?: any): Promise<string> => {
   if (!apiKey) return "";
   const ai = new GoogleGenAI({ apiKey });
   
-  const MANDATORY_STYLE = `Style: grounded dark erotic academia, baroque brutalism, vampire noir, intimate psychological horror, Rembrandt/Caravaggio lighting. Technical: intimate 50mm/85mm close-up, single gaslight source, extreme chiaroscuro. Mood: predatory intimacy, clinical amusement, suffocating dread. Quality: masterpiece oil painting, high detail on skin texture and fabric strain. NO: anime, cartoon, sketch, fantasy.`;
+  let finalPrompt = prompt;
   
+  if (visualJSON) {
+    // Reconstruct the prompt from the JSON mandate to ensure the model gets the exact keywords
+    const charStr = visualJSON.characters.map((c: any) => `${c.id} wearing ${c.outfit}, ${c.expression}, ${c.pose}`).join(". ");
+    finalPrompt = `
+    Style: ${visualJSON.style}.
+    Mood: ${visualJSON.mood}.
+    Environment: ${visualJSON.environment}.
+    Characters: ${charStr}.
+    Technical: Camera ${visualJSON.technical?.camera}, Lighting ${visualJSON.technical?.lighting}.
+    Quality: ${visualJSON.quality}.
+    `;
+  } else {
+     const MANDATORY_STYLE = `Style: grounded dark erotic academia, baroque brutalism, vampire noir, intimate psychological horror, Rembrandt/Caravaggio lighting. Technical: intimate 50mm/85mm close-up, single gaslight source, extreme chiaroscuro. Mood: predatory intimacy, clinical amusement, suffocating dread. Quality: masterpiece oil painting, high detail on skin texture and fabric strain. NO: anime, cartoon, sketch, fantasy.`;
+     finalPrompt = `${prompt}. ${MANDATORY_STYLE}`;
+  }
+
   try {
-    const response = await ai.models.generateImages({
-      model: 'imagen-4.0-generate-001',
-      prompt: `${prompt}. ${MANDATORY_STYLE}`,
-      config: { numberOfImages: 1, aspectRatio: '16:9', outputMimeType: 'image/png' }
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image', // Reverted to flash-image as requested
+      contents: { parts: [{ text: finalPrompt }] },
+      config: { responseModalities: [Modality.IMAGE] }
     });
-    const base64 = response.generatedImages?.[0]?.image?.imageBytes;
-    return base64 ? `data:image/png;base64,${base64}` : "";
+    const part = response.candidates?.[0]?.content?.parts?.[0];
+    if (part && 'inlineData' in part && part.inlineData) {
+        const base64 = part.inlineData.data;
+        return `data:image/png;base64,${base64}`;
+    }
+    return "";
   } catch (e) { console.error("Image Gen Error:", e); return ""; }
 };
 
@@ -191,19 +221,12 @@ export const editVisual = async (apiKey: string, baseImageBase64: string, mimeTy
   if (!apiKey || !baseImageBase64) return "";
   const ai = new GoogleGenAI({ apiKey });
 
-  const fullPrompt = `
-    Inpaint/edit ONLY the specified change: "${changePrompt}"
-    
-    CRITICAL RULES — NEVER VIOLATE:
-    - Keep faces, bodies, lighting, composition, colors, background 100% identical.
-    - Change ONLY the target element (e.g., expression, pose, one clothing detail).
-    - No creative liberties — this is a precise, surgical modification.
-    - Style must remain: grounded dark erotic academia + baroque brutalism.
-  `;
+  // Surgical inpainting rule
+  const fullPrompt = `Inpaint ONLY "${changePrompt}". Keep everything else 100% identical pixel-perfect.`;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
+      model: 'gemini-2.5-flash-image', // Using flash-image for editing
       contents: { parts: [
           { inlineData: { mimeType, data: baseImageBase64 } },
           { text: fullPrompt }
@@ -216,23 +239,40 @@ export const editVisual = async (apiKey: string, baseImageBase64: string, mimeTy
   } catch (e) { console.error("Edit Visual Error:", e); return ""; }
 };
 
+export const outpaintVisual = async (apiKey: string, baseImageBase64: string, mimeType: string): Promise<string> => {
+  if (!apiKey || !baseImageBase64) return "";
+  const ai = new GoogleGenAI({ apiKey });
+
+  const fullPrompt = `Outpaint this image, expanding the view outwards on all sides. Maintain the exact style: grounded dark erotic academia, baroque brutalism, vampire noir. The new areas must be a logical, seamless continuation of the existing scene. Preserve all original details perfectly.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image', // Using flash-image for outpainting
+      contents: { parts: [
+          { inlineData: { mimeType, data: baseImageBase64 } },
+          { text: fullPrompt }
+      ]},
+      config: { responseModalities: [Modality.IMAGE] }
+    });
+    
+    const base64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    return base64 ? `data:image/png;base64,${base64}` : "";
+  } catch (e) { console.error("Outpaint Visual Error:", e); return ""; }
+};
+
 export const generateVideo = async (apiKey: string, imageBase64: string, prompt: string): Promise<string> => {
     if (!apiKey) return "";
     const ai = new GoogleGenAI({ apiKey });
     
     try {
-        let operation = await ai.models.generateVideos({
-            model: 'veo-3.1-fast-generate-preview',
+        const operation = await ai.models.generateVideos({
+            model: 'gemini-3-pro-preview', // Video must use 3.0 Pro or Veo
             prompt: prompt + ", subtle cinematic movement, slow pan, atmospheric lighting, 4k, keeping the oil painting style",
             image: { imageBytes: imageBase64.split(',')[1], mimeType: 'image/png' },
             config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' }
         });
 
-        while (!operation.done) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            operation = await ai.operations.getVideosOperation({operation: operation});
-        }
-
+        // No polling as per directive
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
         if (videoUri) {
             const videoRes = await fetch(`${videoUri}&key=${apiKey}`);
@@ -240,5 +280,5 @@ export const generateVideo = async (apiKey: string, imageBase64: string, prompt:
             return URL.createObjectURL(blob);
         }
         return "";
-    } catch (e) { console.error("Veo Video Gen Error:", e); return ""; }
+    } catch (e) { console.error("Video Gen Error:", e); return ""; }
 };

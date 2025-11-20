@@ -61,7 +61,8 @@ export interface NarrativeState {
   text: string;
   speaker?: string;
   speakerId?: string; // ID of the character speaking
-  backgroundPrompt?: string;
+  backgroundPrompt?: string; // Deprecated but kept for compatibility
+  visualPromptJSON?: any; // Structured JSON for image generation
   backgroundImageUrl?: string; // Generated or cached
   characterSpritePrompt?: string;
   characterSpriteUrl?: string; // Generated or cached
