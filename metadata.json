@@ -1,0 +1,7 @@
+{
+  "name": "The Forge's Loom",
+  "description": "A high-fidelity procedural visual novel engine driven by Gemini 3.0 Pro. Features the 'YandereLedger' state machine, 'Nano Banana' visual generation, and deep lore integration based on 'The Institute for the Study of Masculinity'.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
