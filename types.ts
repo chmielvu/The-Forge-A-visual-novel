@@ -1,4 +1,10 @@
 
+import type { DirectorAI } from './services/directorService';
+import type { NetworkXGraphService } from './services/graphService';
+import type { VisualValidator } from './services/visualValidator';
+import type { EnhancedTTSService } from './services/enhancedTTS';
+
+
 export enum Role {
   PROVOST = 'Provost',
   LOGICIAN = 'Logician',
@@ -78,6 +84,10 @@ export interface NarrativeState {
     links: GraphLink[];
   };
   audio?: AudioState;
+  directorNotes?: {
+    hiddenPlots: string[];
+    futureHooks: string[];
+  }
 }
 
 export interface AppState {
@@ -94,4 +104,17 @@ export interface AppState {
   isGeneratingVideo: boolean;
   apiKey: string | null;
   sceneBaseImage?: string; // Cache for image editing
+
+  // NEW: Enhanced services
+  directorAI?: DirectorAI;
+  graphService?: NetworkXGraphService;
+  visualValidator?: VisualValidator;
+  ttsService?: EnhancedTTSService;
+  
+  // NEW: Director insights
+  directorInsights?: {
+    hiddenPlots?: string[];
+    futureHooks?: string[];
+    tropeEntropy?: number;
+  };
 }

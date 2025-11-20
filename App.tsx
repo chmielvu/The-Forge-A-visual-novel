@@ -2,10 +2,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { INITIAL_CHARACTERS } from './lore';
 import { AppState, CurriculumPhase, NarrativeState } from './types';
-import { generateScene, generateVisual, editVisual, generateSpeech, generateSSML, generateVideo, urlToBase64, outpaintVisual } from './services/geminiService';
+import { createDirectorAI, createGraphService, createVisualValidator, createTTSService } from './services';
+import { urlToBase64, editVisual } from './services/geminiService'; // Keep some helpers
 import { YandereLedgerUI } from './components/YandereLedger';
 import { NetworkGraph } from './components/NetworkGraph';
 import { AudioManager } from './components/AudioManager';
+import { DirectorInsights } from './components/DirectorInsights';
 import { triggerUnlock, isAudioUnlocked, startAmbientAfterUnlock } from './components/SafeAudio';
 import { Fingerprint, Loader2, Video, Volume2, Expand } from 'lucide-react';
 
@@ -26,7 +28,14 @@ const INITIAL_STATE: AppState = {
     sceneId: "start",
     text: "The ferry engine cuts. Silence. The air smells of salt and wet concrete. You stand before the massive iron gates of The Forge. Magistra Selene watches from the ramparts, a silhouette in crimson velvet against the storm.",
     speaker: "Narrator",
-    backgroundPrompt: "Magistra Selene standing on brutalist concrete ramparts, storm clouds, crimson velvet robe plunging to navel, wind blowing hair, arrogant power pose, wide shot, masterpiece oil painting",
+    visualPromptJSON: {
+        "style": "grounded dark erotic academia + baroque brutalism + vampire noir + intimate psychological horror + rembrandt caravaggio lighting",
+        "technical": {"camera": "intimate 50mm or 85mm close-up", "lighting": "single gaslight, extreme chiaroscuro, shadows in cleavage and slits"},
+        "mood": "predatory intimacy, clinical amusement, suffocating dread, weaponized sexuality",
+        "characters": [{"id": "selene", "outfit": "Crimson velvet robe plunging to navel", "expression": "cold amused contempt", "pose": "standing on brutalist concrete ramparts"}],
+        "environment": "storm clouds, wind blowing",
+        "quality": "restrained masterpiece oil painting"
+    },
     choices: [
       { id: '1', text: "Look down and wait.", impactPrediction: "Compliance +5" },
       { id: '2', text: "Stare back at her.", impactPrediction: "Defiance -> Trauma Risk" }
@@ -55,23 +64,58 @@ function App() {
   const [showApiKeyModal, setShowApiKeyModal] = useState(true);
   const [audioActive, setAudioActive] = useState(false); 
   const [showUnlockOverlay, setShowUnlockOverlay] = useState(false);
-  const [isOutpainting, setIsOutpainting] = useState(false);
+  const [thinkingStage, setThinkingStage] = useState<string>("");
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  // Initialize Services
   useEffect(() => {
-    if (process.env.API_KEY) handleApiKeySubmit(process.env.API_KEY);
-  }, []);
+    if (state.apiKey && !state.directorAI) {
+      const directorAI = createDirectorAI(state.apiKey!);
+      const graphService = createGraphService(state.apiKey!);
+      const visualValidator = createVisualValidator(state.apiKey!);
+      const ttsService = createTTSService(state.apiKey!);
+      
+      setState(prev => ({ ...prev, directorAI, graphService, visualValidator, ttsService }));
+      
+      const savedGraph = localStorage.getItem('forge_graph');
+      graphService.initializeGraph(state).then(() => {
+          if(savedGraph && graphService) {
+              // Re-initialize graph with saved data - simplistic for now
+              console.log("Graph state loaded from previous session.");
+          }
+      });
+    }
+  }, [state.apiKey]);
 
+  // Main visual effect hook
   useEffect(() => {
-      if (!showApiKeyModal && !isAudioUnlocked()) setShowUnlockOverlay(true);
-  }, [showApiKeyModal]);
+    if (state.apiKey) {
+      generateValidatedVisuals(state.currentScene, null);
+    }
+  }, [state.currentScene.sceneId]); // Reruns only when sceneId changes
+  
+  // Cache graph state
+  useEffect(() => {
+    if (state.graphService) {
+        // Debounced save
+        const timer = setTimeout(() => {
+            const graphData = state.graphService.getGraphStateForUI();
+            if(graphData.nodes.length > INITIAL_STATE.graph.nodes.length) {
+                localStorage.setItem('forge_graph', JSON.stringify(graphData));
+            }
+        }, 2000);
+        return () => clearTimeout(timer);
+    }
+  }, [state.graph]);
 
+  // TTS hook
   useEffect(() => {
     if (audioActive && state.currentScene.text && state.apiKey) {
         const timer = setTimeout(() => playTTS(), 500);
         return () => clearTimeout(timer);
     }
   }, [state.currentScene.text, audioActive, state.apiKey]);
+
 
   const handleUnlockAudio = () => {
       triggerUnlock();
@@ -84,107 +128,91 @@ function App() {
   const handleApiKeySubmit = (key: string) => {
     setState(prev => ({ ...prev, apiKey: key }));
     setShowApiKeyModal(false);
-    refreshVisuals(key, state.currentScene, null); 
   };
-
-  const refreshVisuals = async (key: string, scene: NarrativeState, previousState: AppState | null) => {
-    if (!scene.backgroundPrompt && !scene.visualPromptJSON) return;
-
-    setState(prev => ({...prev, isGeneratingVisuals: true}));
-    
-    let finalImage = "";
-    const isSameScene = scene.sceneId && previousState?.currentScene?.sceneId && scene.sceneId === previousState.currentScene.sceneId;
-
-    if (isSameScene && previousState?.sceneBaseImage) {
-        console.log("Editing existing scene:", scene.sceneId);
-        const changePrompt = scene.characterSpritePrompt || (scene.visualPromptJSON ? "Update character expression" : scene.backgroundPrompt);
+  
+  const generateValidatedVisuals = async (scene: NarrativeState, previousState: AppState | null) => {
+    if (!scene.visualPromptJSON || !state.visualValidator) return;
+    setState(prev => ({ ...prev, isGeneratingVisuals: true }));
+    try {
+      const isSameScene = scene.sceneId && previousState?.currentScene?.sceneId && scene.sceneId === previousState.currentScene.sceneId;
+      let finalImage = "";
+      if (isSameScene && previousState?.sceneBaseImage) {
+        console.log("🎨 Editing existing scene:", scene.sceneId);
+        const editPrompt = `Update: ${scene.visualPromptJSON.characters.map((c: any) => `${c.id} now ${c.expression}, ${c.pose}`).join(', ')}`;
         const { base64, mimeType } = await urlToBase64(previousState.sceneBaseImage);
         if (base64) {
-            finalImage = await editVisual(key, base64, mimeType, changePrompt || "Update details");
+          finalImage = await editVisual(state.apiKey!, base64, mimeType, editPrompt);
         }
-        if (!finalImage) finalImage = previousState.sceneBaseImage;
-    } else {
-        console.log("Generating new scene:", scene.sceneId);
-        finalImage = await generateVisual(key, scene.backgroundPrompt || "Dark scene", scene.visualPromptJSON);
-    }
-
-    if (finalImage) {
+      } else {
+        console.log("🎨 Generating new validated scene:", scene.sceneId);
+        finalImage = await state.visualValidator.generateValidatedImage(scene.visualPromptJSON, 2);
+      }
+      if (finalImage) {
         setBgImage(finalImage);
         setState(prev => ({ ...prev, sceneBaseImage: finalImage }));
+      }
+    } catch (error) {
+      console.error("Visual generation error:", error);
+      if (state.visualValidator) {
+        const fallback = await state.visualValidator.generateFallbackImage(scene.text);
+        if (fallback) setBgImage(fallback);
+      }
     }
-
-    setState(prev => ({...prev, isGeneratingVisuals: false}));
-  };
-
-  const handleGenerateVideo = async () => {
-      if (!state.apiKey || !state.sceneBaseImage || state.isGeneratingVideo) return;
-      setState(prev => ({...prev, isGeneratingVideo: true}));
-      const { base64 } = await urlToBase64(state.sceneBaseImage);
-      const videoUrl = await generateVideo(state.apiKey, `data:image/png;base64,${base64}`, state.currentScene.backgroundPrompt || "Atmospheric scene");
-      if (videoUrl) setState(prev => ({ ...prev, currentScene: { ...prev.currentScene, videoUrl } }));
-      setState(prev => ({...prev, isGeneratingVideo: false}));
-  };
-
-  const handleOutpaint = async () => {
-    if (!state.apiKey || !state.sceneBaseImage || isOutpainting || state.isGeneratingVisuals) return;
-    setIsOutpainting(true);
-    const { base64, mimeType } = await urlToBase64(state.sceneBaseImage);
-    if (base64) {
-        const newImage = await outpaintVisual(state.apiKey, base64, mimeType);
-        if (newImage) {
-            setBgImage(newImage);
-            setState(prev => ({ ...prev, sceneBaseImage: newImage }));
-        }
-    }
-    setIsOutpainting(false);
+    setState(prev => ({ ...prev, isGeneratingVisuals: false }));
   };
 
   const playTTS = async () => {
-     if (!state.apiKey || !state.currentScene.text) return;
-     const { text, speakerId, audio } = state.currentScene;
-     const voiceId = state.characters[speakerId || '']?.voiceId || 'Puck';
-     const mood = audio?.narratorMood || 'clinical';
-     
-     const ssmlText = await generateSSML(state.apiKey, text, mood, speakerId);
-     const audioData = await generateSpeech(state.apiKey, ssmlText, voiceId);
-     if (audioData) {
-        const url = `data:audio/mp3;base64,${audioData}`;
+    if (!state.apiKey || !state.currentScene.text || !state.ttsService) return;
+    const { text, speakerId, audio } = state.currentScene;
+    const mood = audio?.narratorMood || 'clinical';
+    const traumaLevel = state.ledger.traumaLevel;
+    try {
+      const { audioBase64, ssml } = await state.ttsService.generateSpeech({ text, speakerId, mood, traumaLevel, intensity: traumaLevel > 50 ? 0.8 : 0.5 });
+      if (audioBase64) {
+        const url = `data:audio/mp3;base64,${audioBase64}`;
         setAudioUrl(url);
         if (audioRef.current) {
-            audioRef.current.src = url;
-            audioRef.current.play().catch(e => console.warn("Audio play failed:", e));
+          audioRef.current.src = url;
+          audioRef.current.play().catch(e => console.warn("Audio play failed:", e));
         }
-     }
+        console.log('🎤 SSML Performance:', ssml.slice(0, 200) + '...');
+      }
+    } catch (error) {
+      console.error("Enhanced TTS failed:", error);
+    }
   };
-
+  
   const handleChoice = async (choiceText: string) => {
-    if (!state.apiKey || state.isThinking) return;
-
-    setState(prev => ({ ...prev, isThinking: true, currentScene: {...prev.currentScene, videoUrl: undefined} }));
+    if (!state.apiKey || state.isThinking || !state.directorAI) return;
+    setState(prev => ({ ...prev, isThinking: true }));
     const previousState = { ...state };
-
     try {
-      const nextScene = await generateScene(state.apiKey, state, choiceText);
-      
+      const nextScene = await state.directorAI.orchestrate(state, choiceText, setThinkingStage);
+      if (nextScene.graphUpdates && state.graphService) {
+        for (const link of nextScene.graphUpdates.links) {
+          await state.graphService.addEdge(link.source, link.target, link.label, link.strength);
+        }
+        const graphAnalysis = await state.graphService.analyzeGraph(state);
+        console.log('📊 Graph Analysis:', graphAnalysis);
+        setState(prev => ({
+          ...prev,
+          directorInsights: {
+            ...prev.directorInsights,
+            tropeEntropy: graphAnalysis.tropeEntropy,
+            hiddenPlots: nextScene.directorNotes?.hiddenPlots,
+            futureHooks: nextScene.directorNotes?.futureHooks
+          }
+        }));
+      }
       const newLedger = { ...state.ledger, ...nextScene.ledgerUpdates, turnCount: state.ledger.turnCount + 1 };
       const newHistory = [...state.history, state.currentScene];
+      const newGraphState = state.graphService ? state.graphService.getGraphStateForUI() : state.graph;
       
-      const newGraph = { ...state.graph };
-      if (nextScene.graphUpdates) {
-          nextScene.graphUpdates.nodes.forEach(n => { if (!newGraph.nodes.find(ex => ex.id === n.id)) newGraph.nodes.push(n); });
-          nextScene.graphUpdates.links.forEach(l => newGraph.links.push(l));
-      }
-      
-      const newState = {
-        ...state, ledger: newLedger, history: newHistory, currentScene: nextScene,
-        graph: newGraph, isThinking: false
-      };
-      
+      const newState: AppState = { ...state, ledger: newLedger, history: newHistory, currentScene: nextScene, graph: newGraphState, isThinking: false };
       setState(newState);
-      refreshVisuals(state.apiKey, nextScene, previousState);
-
+      await generateValidatedVisuals(nextScene, previousState);
     } catch (e) {
-      console.error("Game Loop Error", e);
+      console.error("Enhanced Game Loop Error", e);
       setState(prev => ({ ...prev, isThinking: false }));
     }
   };
@@ -211,27 +239,21 @@ function App() {
           </div>
         </div>
       )}
-      {!showApiKeyModal && showUnlockOverlay && (
-          <div className="absolute inset-0 z-40 bg-black/90 flex items-center justify-center cursor-pointer" onClick={handleUnlockAudio}>
-              <div className="text-center animate-pulse"><Fingerprint size={64} className="mx-auto text-[#d4af37] mb-4" />
-                  <h2 className="text-3xl text-gray-200 font-header tracking-[0.2em]">TAP TO ENTER</h2>
-              </div>
+      {state.isThinking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+          <div className="text-center">
+            <Loader2 className="animate-spin text-[#d4af37] mx-auto mb-4" size={48} />
+            <p className="text-gray-400 font-mono-code">{thinkingStage}</p>
           </div>
+        </div>
       )}
+
       <div className="flex-1 relative">
         <div className="absolute inset-0 bg-cover bg-center transition-opacity duration-1000" style={{ backgroundImage: `url(${bgImage})` }}>
-            {state.currentScene.videoUrl ? (<video src={state.currentScene.videoUrl} autoPlay loop muted className="absolute inset-0 w-full h-full object-cover"/>) : (<div className="absolute inset-0 bg-black/20 weeping-wall mix-blend-overlay" />)}
+           <div className="absolute inset-0 bg-black/20 weeping-wall mix-blend-overlay" />
         </div>
         <div className={`absolute inset-0 pointer-events-none transition-all duration-1000 ${getAtmosphereClass()}`} />
         <div className={`absolute inset-0 pointer-events-none ${getTensionClass()}`} />
-        <div className="absolute top-4 right-4 z-20 flex gap-2">
-            <button onClick={handleOutpaint} disabled={isOutpainting || state.isGeneratingVisuals || state.isGeneratingVideo} className="bg-black/50 hover:bg-[#d4af37]/20 text-white p-2 rounded border border-white/10 disabled:opacity-30 backdrop-blur-md">
-                {isOutpainting ? <Loader2 className="animate-spin text-[#d4af37]" size={20} /> : <Expand size={20} />}
-            </button>
-            <button onClick={handleGenerateVideo} disabled={state.isGeneratingVideo || !!state.currentScene.videoUrl || isOutpainting} className="bg-black/50 hover:bg-[#d4af37]/20 text-white p-2 rounded border border-white/10 disabled:opacity-30 backdrop-blur-md">
-                {state.isGeneratingVideo ? <Loader2 className="animate-spin text-[#d4af37]" size={20} /> : <Video size={20} />}
-            </button>
-        </div>
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-black via-black/95 to-transparent pt-32 z-20">
            <div className="max-w-4xl mx-auto">
               <div className="flex justify-between items-end mb-3">
@@ -251,8 +273,15 @@ function App() {
         </div>
       </div>
       <div className="w-80 h-full flex flex-col bg-[#050505] border-l border-[#222] z-30">
-         <div className="h-1/2 border-b border-[#222]"><YandereLedgerUI ledger={state.ledger} /></div>
-         <div className="h-1/2 relative bg-[#0a0a0a]"><NetworkGraph nodes={state.graph.nodes} links={state.graph.links} /></div>
+        <div className="h-1/3 border-b border-[#222]">
+            <YandereLedgerUI ledger={state.ledger} />
+        </div>
+        <div className="h-1/3 border-b border-[#222]">
+            <DirectorInsights insights={state.directorInsights} />
+        </div>
+        <div className="h-1/3 relative bg-[#0a0a0a]">
+            <NetworkGraph nodes={state.graph.nodes} links={state.graph.links} />
+        </div>
       </div>
       <audio ref={audioRef} className="hidden" />
     </div>

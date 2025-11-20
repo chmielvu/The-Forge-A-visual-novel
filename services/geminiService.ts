@@ -1,6 +1,16 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { AppState, NarrativeState } from '../types';
-import { LORE_SYSTEM_PROMPT, ABYSS_NARRATOR_INSTRUCTION, CHARACTER_TTS_INSTRUCTIONS, VISUAL_JSON_MANDATE } from '../lore';
+import { LORE_SYSTEM_PROMPT, ABYSS_NARRATOR_INSTRUCTION, CHARACTER_TTS_INSTRUCTIONS, VISUAL_JSON_MANDATE, INITIAL_CHARACTERS } from '../lore';
+
+// Hardcoded mandate values extracted from lore for enforcement
+const ENFORCED_VISUAL_STYLE = {
+  style: "grounded dark erotic academia + baroque brutalism + vampire noir + intimate psychological horror + rembrandt caravaggio lighting",
+  technical: {
+    camera: "intimate 50mm or 85mm close-up",
+    lighting: "single gaslight, extreme chiaroscuro, shadows in cleavage and slits"
+  },
+  quality: "restrained masterpiece oil painting, no fantasy elements, high detail on skin texture and fabric strain"
+};
 
 export const generateScene = async (
   apiKey: string,
@@ -42,6 +52,8 @@ export const generateScene = async (
     Generate the next narrative beat.
     - Choose a speaker from: ${Object.keys(state.characters).join(', ')} or "Narrator".
     - **VISUAL MANDATE**: You MUST populate the 'visualPromptJSON' field according to the following schema for EVERY scene. This defines the image generation.
+    - **CHARACTER ID RULE**: In the 'visualPromptJSON.characters' array, use the exact 'ID' provided in the CHARACTER list above (e.g., 'selene', 'petra').
+    - **OUTFIT RULE**: Extract the specific 'outfit' details from the character's Base Visual Profile in the context. Do not summarize; use the descriptive text (e.g., "Crimson velvet robe plunging to navel").
     ${VISUAL_JSON_MANDATE}
     - Output strictly valid JSON conforming to the schema.
   `;
@@ -69,7 +81,7 @@ export const generateScene = async (
                 style: { type: Type.STRING },
                 technical: { type: Type.OBJECT, properties: { camera: { type: Type.STRING }, lighting: { type: Type.STRING } } },
                 mood: { type: Type.STRING },
-                characters: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { id: { type: Type.STRING }, outfit: { type: Type.STRING }, expression: { type: Type.STRING }, pose: { type: Type.STRING } } } },
+                characters: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { id: { type: Type.STRING, description: "Must match lore ID, e.g. 'selene'" }, outfit: { type: Type.STRING }, expression: { type: Type.STRING }, pose: { type: Type.STRING } } } },
                 environment: { type: Type.STRING },
                 quality: { type: Type.STRING }
               }
@@ -109,6 +121,34 @@ export const generateScene = async (
     });
 
     const json = JSON.parse(response.text || "{}");
+    
+    // --- ENFORCEMENT LAYER ---
+    // Overwrite AI generation with mandatory lore values to ensure consistency
+    if (json.visualPromptJSON) {
+      json.visualPromptJSON.style = ENFORCED_VISUAL_STYLE.style;
+      json.visualPromptJSON.quality = ENFORCED_VISUAL_STYLE.quality;
+      
+      // Merge technical if missing or incomplete
+      if (!json.visualPromptJSON.technical) json.visualPromptJSON.technical = {};
+      json.visualPromptJSON.technical.camera = json.visualPromptJSON.technical.camera || ENFORCED_VISUAL_STYLE.technical.camera;
+      json.visualPromptJSON.technical.lighting = json.visualPromptJSON.technical.lighting || ENFORCED_VISUAL_STYLE.technical.lighting;
+
+      // Canon Injection for Characters
+      if (json.visualPromptJSON.characters && Array.isArray(json.visualPromptJSON.characters)) {
+        json.visualPromptJSON.characters = json.visualPromptJSON.characters.map((char: any) => {
+          const canon = INITIAL_CHARACTERS[char.id] || Object.values(INITIAL_CHARACTERS).find(c => c.name.toLowerCase().includes(char.id?.toLowerCase()));
+          if (canon) {
+            // Ensure the outfit description is rich and accurate by appending canon info if it seems brief or missing
+            const currentOutfit = char.outfit || "";
+            if (!currentOutfit.includes(canon.visualPromptInfo)) {
+              char.outfit = `${currentOutfit}. (Canon details: ${canon.visualPromptInfo})`;
+            }
+          }
+          return char;
+        });
+      }
+    }
+
     return json as NarrativeState;
 
   } catch (error) {
@@ -174,15 +214,21 @@ export const generateVisual = async (apiKey: string, prompt: string, visualJSON?
   let finalPrompt = prompt;
   
   if (visualJSON) {
-    // Reconstruct the prompt from the JSON mandate to ensure the model gets the exact keywords
-    const charStr = visualJSON.characters.map((c: any) => `${c.id} wearing ${c.outfit}, ${c.expression}, ${c.pose}`).join(". ");
+    // Structure the prompt from the JSON to ensure the model follows it exactly
+    let characterDetails = "";
+    if (visualJSON.characters && Array.isArray(visualJSON.characters)) {
+        characterDetails = visualJSON.characters.map((c: any) => {
+             return `${c.id} wearing ${c.outfit}. Expression: ${c.expression}. Pose: ${c.pose}.`;
+        }).join(" ");
+    }
+
     finalPrompt = `
-    Style: ${visualJSON.style}.
-    Mood: ${visualJSON.mood}.
-    Environment: ${visualJSON.environment}.
-    Characters: ${charStr}.
-    Technical: Camera ${visualJSON.technical?.camera}, Lighting ${visualJSON.technical?.lighting}.
-    Quality: ${visualJSON.quality}.
+    Style: ${visualJSON.style}
+    Mood: ${visualJSON.mood}
+    Environment: ${visualJSON.environment}
+    Characters: ${characterDetails}
+    Technical: Camera ${visualJSON.technical?.camera}, Lighting ${visualJSON.technical?.lighting}
+    Quality: ${visualJSON.quality}
     `;
   } else {
      const MANDATORY_STYLE = `Style: grounded dark erotic academia, baroque brutalism, vampire noir, intimate psychological horror, Rembrandt/Caravaggio lighting. Technical: intimate 50mm/85mm close-up, single gaslight source, extreme chiaroscuro. Mood: predatory intimacy, clinical amusement, suffocating dread. Quality: masterpiece oil painting, high detail on skin texture and fabric strain. NO: anime, cartoon, sketch, fantasy.`;
@@ -191,7 +237,7 @@ export const generateVisual = async (apiKey: string, prompt: string, visualJSON?
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image', // Reverted to flash-image as requested
+      model: 'gemini-2.5-flash-image',
       contents: { parts: [{ text: finalPrompt }] },
       config: { responseModalities: [Modality.IMAGE] }
     });
@@ -226,7 +272,7 @@ export const editVisual = async (apiKey: string, baseImageBase64: string, mimeTy
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image', // Using flash-image for editing
+      model: 'gemini-2.5-flash-image',
       contents: { parts: [
           { inlineData: { mimeType, data: baseImageBase64 } },
           { text: fullPrompt }
@@ -247,7 +293,7 @@ export const outpaintVisual = async (apiKey: string, baseImageBase64: string, mi
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image', // Using flash-image for outpainting
+      model: 'gemini-2.5-flash-image',
       contents: { parts: [
           { inlineData: { mimeType, data: baseImageBase64 } },
           { text: fullPrompt }
